@@ -45,7 +45,7 @@ DB_CONFIG = {
 }
 
 TICKER = "INR=X"            # Yahoo Finance symbol for USD/INR
-INDICATOR_NAME = "USD_INR"  # how this indicator is labelled in the DB
+INDICATOR_NAME = "USDINR"  # how this indicator is labelled in the DB
 LOOKBACK_PERIOD = "7d"      # a week, so we still get 2 trading days after a weekend/holiday
 
 
@@ -63,7 +63,7 @@ log = logging.getLogger("macropulse.fetch")
 # --------------------------------------------------------------------------- #
 # Fetch
 # --------------------------------------------------------------------------- #
-def fetch_usd_inr() -> tuple[date, float, float]:
+def fetch_usdinr() -> tuple[date, float, float]:
     """
     Download recent USD/INR closes and compute the latest day-over-day % change.
 
@@ -148,7 +148,7 @@ def upsert_row(as_of_date: date, value: float, pct_change: float) -> None:
 def main() -> int:
     # Stage 1: fetch
     try:
-        as_of_date, value, pct_change = fetch_usd_inr()
+        as_of_date, value, pct_change = fetch_usdinr()
     except Exception as exc:  # network, parsing, or insufficient-data errors
         log.error("Fetch failed: %s", exc)
         return 1
