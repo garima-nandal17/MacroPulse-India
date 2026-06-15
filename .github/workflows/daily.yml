@@ -1,0 +1,43 @@
+name: daily-indicators
+
+# Keeps daily_indicators current. fetch_daily.py is idempotent and yfinance
+# serves history, so a missed/delayed run self-heals on the next successful run.
+
+on:
+  schedule:
+    # 12:30 UTC = 18:00 IST, Mon–Fri (after NSE close ~15:30 IST).
+    # NOTE: GitHub cron is UTC and may be delayed several minutes under load.
+    # Weekday filter does not skip NSE holidays — harmless (idempotent, no new data).
+    - cron: "30 12 * * 1-5"
+  workflow_dispatch: {}        # manual run / catch-up
+
+concurrency:
+  group: daily-indicators      # never let two daily runs overlap
+  cancel-in-progress: false
+
+jobs:
+  fetch-daily:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Fetch daily indicators
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+          # Optional: only if get_connection reads an explicit CA path.
+          # On ubuntu-latest the system bundle is /etc/ssl/certs/ca-certificates.crt
+          DB_SSL_CA: ${{ secrets.DB_SSL_CA }}
+        run: python fetch_daily.py
