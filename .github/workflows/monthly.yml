@@ -1,0 +1,46 @@
+name: monthly-indicators
+
+# Loads monthly_indicators from files in data/monthly_raw/. The LOAD is automated;
+# the DOWNLOAD stays manual (no stable source URL). Ritual: drop the new file in
+# data/monthly_raw/<indicator>/, commit, push -> the push trigger runs the load.
+#
+# IMPORTANT: the runner only sees files that are COMMITTED to the repo. This
+# reverses the earlier "gitignore data/monthly_raw" decision — the monthly files
+# are small and low-frequency, so commit them (also serves as provenance).
+
+on:
+  workflow_dispatch: {}        # manual run
+  push:
+    paths:
+      - "data/monthly_raw/**"  # commit a new monthly file -> auto-load
+  schedule:
+    - cron: "0 8 13 * *"       # 08:00 UTC on the 13th (after CPI/IIP release) — backstop
+
+concurrency:
+  group: monthly-indicators
+  cancel-in-progress: false
+
+jobs:
+  load-monthly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Load monthly indicators
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_SSL_CA: ${{ secrets.DB_SSL_CA }}
+        run: python load_monthly.py
