@@ -95,3 +95,38 @@ Source material for interview STAR stories and the Day-14 BRD.
 - `base_year` — index base (CPI 2024, IIP 2022-23; NULL for rate series)
 - `source` — provenance (MoSPI / RBI)
 - `fetched_at` — load timestamp
+## Day 4 — Cloud migration & CI automation
+
+**Status:** Complete. End-to-end pipeline runs unattended:
+GitHub Actions → Python ETL → TiDB Cloud. No local-machine dependency.
+
+**Decisions**
+- Migrated the database from localhost MySQL to **TiDB Cloud** (`macropulse_india`):
+  network-reachable + TLS, which unblocked runner-based automation.
+- Runner = **GitHub Actions**.
+  - `daily.yml`:   schedule `30 12 * * 1-5` (18:00 IST, Mon–Fri) + `workflow_dispatch`.
+  - `monthly.yml`: `push` on `data/monthly_raw/**` + `0 8 13 * *` backstop + `workflow_dispatch`.
+  - `concurrency` guards prevent overlapping runs; loads remain idempotent.
+- **Committed monthly raw files** to the repo (reversed the earlier gitignore):
+  the runner sees only committed state, and committed sources double as provenance.
+- DB credentials via **repository secrets**; `requirements.txt` pinned (incl. `openpyxl`).
+
+**Friction (STAR material)**
+- First monthly run failed: `load_monthly.py` and the monthly raw files were untracked
+  locally and never pushed, so the runner's checkout had nothing to load. Diagnosed via
+  VS Code's untracked-files view, committed + synced, re-ran green.
+  Lesson: "works locally" ≠ "works in CI" — the runner sees only committed state.
+- TiDB's mandatory TLS flagged as a cross-environment risk: a hardcoded local CA path
+  would fail on the Ubuntu runner; `ssl_ca` made env-configurable (`DB_SSL_CA`, default
+  system bundle).
+
+**Verification**
+- `daily.yml` succeeded via `workflow_dispatch`; `daily_indicators` holds the 8 canonical
+  indicators (9 rows incl. a legitimate earlier US10Y obs on 2026-06-12; `UNIQUE(date,
+  indicator)` confirmed working).
+- `monthly.yml` green after sync; `monthly_indicators` = 66 rows.
+- TiDB queries confirm writes originated from GitHub Actions. Both workflows green.
+
+**Known limitations**
+- PLFS UR: 2026 Jan/Feb gap (source) — backfillable, idempotent.
+- Monthly file download remains manual (commit-to-trigger ritual).
