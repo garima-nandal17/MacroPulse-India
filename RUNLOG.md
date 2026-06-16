@@ -130,3 +130,32 @@ GitHub Actions → Python ETL → TiDB Cloud. No local-machine dependency.
 **Known limitations**
 - PLFS UR: 2026 Jan/Feb gap (source) — backfillable, idempotent.
 - Monthly file download remains manual (commit-to-trigger ritual).
+## Day 5 — Point-in-time feature layer
+
+**Status:** Complete. Materialized `features_daily` in TiDB — a point-in-time feature
+store with a built-in lookahead guardrail.
+
+**Decisions**
+- Built `build_features.py`: loads daily + monthly from TiDB, joins each monthly
+  indicator onto the daily date spine via `pandas.merge_asof(direction="backward")`
+  keyed on **`release_date`, not `period`** — each date sees only macro values public
+  on or before it (no lookahead bias).
+- Materialized as wide table `features_daily` (date PK + 8 daily + 4 monthly cols),
+  full-refreshed each run (derived table → idempotent).
+- Added a **lookahead audit** (first-known date vs earliest release per indicator),
+  printed every run as an automated guardrail.
+
+**Prerequisite resolved**
+- Cloud `daily_indicators` held only 9 rows (history lived on the retired localhost DB).
+  Re-ran `backfill_daily.py` → upserted ~4,000 rows; count 9 → 4,004.
+
+**Verification**
+- DRY_RUN: 521 rows × 13 cols, 2024-06-17 → 2026-06-16; lookahead audit OK for
+  CPI, IIP, Unemployment, RepoRate.
+- Materialized: `features_daily` = 521 rows × 13 cols; `COUNT(*)` confirmed.
+
+**Known limitations**
+- Feature store holds **levels**; monthly columns are forward-filled step functions,
+  NaN before each indicator's first release (UR starts mid-2025; RepoRate is a single
+  value). Returns/changes transform deferred to the analysis layer (Day 6).
+- PLFS UR 2026 Jan/Feb gap persists upstream.
