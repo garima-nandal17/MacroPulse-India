@@ -214,3 +214,33 @@ multi-frequency robustness checks. Analysis built to survive scrutiny.
 
 **Next (Day 7):** Predictive model on the leak-free feature set — walk-forward validated,
 benchmarked against naive baselines, interpreted honestly.
+## Day 7 — Sector Sensitivity Engine (correlations + serving layer)
+
+**Status:** Complete. Reusable engine operational; serves the Impact Panel, What-if
+Simulator, and AI Briefing.
+
+**Decisions**
+- `correlation_matrix.py`: Pearson + Spearman correlations, asset × macro-factor, daily +
+  monthly, on analysis_daily → long table `correlation_results`. Companion to the betas.
+- `sensitivity_engine.py`: a serving layer (no table) that reads `sensitivity_results` +
+  `correlation_results` and exposes `sector_view`, `factor_view`, `correlation_matrix`,
+  `project_impact`, `top_drivers`.
+- `project_impact(shocks)` contract — per-asset response = Σ β·shock over **significant**
+  betas (α=0.10) — is the dependency the What-if Simulator and Impact Panel build on.
+- Coupling is via table names, not filenames: builders can change; the engine and consumers
+  depend only on the `*_results` contracts.
+
+**Verification**
+- `correlation_results`: 96 rows = 8 assets × 3 factors (RepoRate skipped) × 2 methods × 2 freqs.
+- Engine smoke test: `factor_view('CPI_chg')` ranked exposures; `project_impact({'CPI_chg':0.005})`
+  returned projected responses; both result tables consumed correctly.
+
+**Methodology / caveats**
+- Betas = response magnitude/direction; correlations = co-movement strength (Pearson linear,
+  Spearman monotonic) — complementary signals.
+- `project_impact` filters to significant betas by default so noise doesn't drive projections;
+  shocks are in each factor's own units. Small-sample caveats from Day 6 carry forward.
+
+**Known limitations**
+- RepoRate still excluded (no variance); enters once rate history grows.
+- Projections are linear (β·shock); non-linear macro responses out of scope for now.
