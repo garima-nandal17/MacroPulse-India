@@ -27,6 +27,14 @@ DAILY_TRANSFORM = {
     "BrentCrude": "ret", "Gold": "ret", "DXY": "ret",
     "IndiaVIX": "ret",   # log-change; ΔVIX is a defensible alternative
     "US10Y": "diff",     # yield -> first difference (Δ pp), NOT a return
+ # Sector indices
+    "NiftyIT": "ret",
+    "NiftyPharma": "ret",
+    "NiftyAuto": "ret",
+    "NiftyFMCG": "ret",
+    "NiftyRealty": "ret",
+    "NiftyMetal": "ret",
+    "NiftyEnergy": "ret",
 }
 MONTHLY_TRANSFORM = {"CPI": "pct", "IIP": "pct", "Unemployment": "diff", "RepoRate": "diff"}
 

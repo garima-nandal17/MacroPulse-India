@@ -71,6 +71,14 @@ INDICATORS = {
     "IndiaVIX":   "^INDIAVIX",  # index level (fear gauge)
     "DXY":        "DX-Y.NYB",   # index level
     "US10Y":      "^TNX",       # 10Y Treasury yield  (verify scale — see note)
+  # Sector indices
+    "NiftyIT":     "^CNXIT",
+    "NiftyPharma": "^CNXPHARMA",
+    "NiftyAuto":   "^CNXAUTO",
+    "NiftyFMCG":   "^CNXFMCG",
+    "NiftyRealty": "^CNXREALTY",
+    "NiftyMetal":  "^CNXMETAL",
+    "NiftyEnergy": "^CNXENERGY",
 }
 
 LOOKBACK_PERIOD = "7d"  # a week guarantees >=2 trading days even after a long weekend
