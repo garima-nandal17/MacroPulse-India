@@ -244,3 +244,77 @@ Simulator, and AI Briefing.
 **Known limitations**
 - RepoRate still excluded (no variance); enters once rate history grows.
 - Projections are linear (β·shock); non-linear macro responses out of scope for now.
+## Day 8 — Industry Impact Panel & analytics orchestrator
+
+**Status:** Panel mechanism + rebuild orchestrator complete. Sector enrichment pending to
+populate true industries (panel currently ranks market-context series).
+
+**Decisions**
+- `impact_panel.py`: first consumer of the Sensitivity Engine. Pulls the current macro state
+  (latest `*_chg` from `analysis_daily`), runs `engine.project_impact(state)` over significant
+  betas, attaches each target's top drivers, and ranks by implied-pressure magnitude. Framed
+  as decision support ("given today's macro environment…"), not a forecast.
+- `rebuild_analytics.py`: orchestrates the derived layer in dependency order —
+  build_features → build_analysis → sensitivity_matrix → correlation_matrix — aborting on
+  first failure. Raw ingestion stays upstream in its own workflows.
+- `impact_panel_snapshot` table: current-state snapshot (asof_date, freq, asset,
+  implied_response, direction, top_drivers), full-refreshed.
+- Added `SECTOR_LABELS` display filter so the panel shows industries (Banks, IT, Pharma,
+  Auto, FMCG, Realty, Metals, Energy) and sets market-context series aside; falls back
+  gracefully (warns, shows all) until sector indices are ingested.
+
+**Friction / key finding (STAR material)**
+- Caught that the panel was an "Industry Impact Panel" only nominally — it ranked the 8
+  market series (Gold, US10Y, Nifty50, …), of which only BankNifty is a true sector.
+  Diagnosed as a DATA gap, not an engine flaw. Fix = sector enrichment + a display filter.
+  **No `project_impact()` refactor needed** — the auto-detecting design absorbs new sector
+  targets with zero engine change, validating the decoupled architecture.
+
+**Verification**
+- `rebuild_analytics.py` runs all four builders in order successfully.
+- `impact_panel.py` DRY_RUN: current macro state pulled correctly; ranked output, driver
+  attribution, significance filtering, and snapshot logic all work.
+
+**Pending (to realize the true Industry Impact Panel)**
+- Add NSE sector tickers to `fetch_daily.py` INDICATORS (NiftyIT `^CNXIT`, NiftyPharma
+  `^CNXPHARMA`, NiftyAuto `^CNXAUTO`, NiftyFMCG `^CNXFMCG`, NiftyRealty `^CNXREALTY`,
+  NiftyMetal `^CNXMETAL`, NiftyEnergy `^CNXENERGY`) — verify each returns history first.
+- Then `backfill_daily.py` → `rebuild_analytics.py` → panel ranks true industries.
+
+**Known limitations**
+- Implied responses are directional/ordinal readings (linear projection, small sample),
+  not point forecasts.
+- RepoRate still excluded (no variance); small-sample caveats from Day 6 carry forward.
+## Day 9 — What-if Scenario Simulator
+
+**Status:** Complete. Second consumer of the Sensitivity Engine, validated.
+
+**Decisions**
+- `whatif_simulator.py`: applies hypothetical macro shocks via the engine's Σ β·shock
+  contract (significant betas), returning ranked per-sector response + direction + dominant
+  contributing factor. Linear projection → a scenario's response is its marginal impact, and
+  multi-factor scenarios are additive.
+- Predefined `SCENARIOS` library (Inflation shock, Disinflation, Growth surge, Industrial
+  slowdown, Stagflation, Soft landing) + arbitrary custom shocks.
+- `compare(scenarios)` → asset/sector × scenario matrix.
+- `significant_only` toggle + `confidence` label (high/low): default projects only significant
+  betas; labeled mode exposes fuller coverage without mistaking noise for signal.
+- Reuses `SECTOR_LABELS` for industry display, with graceful fallback.
+
+**Friction / key finding (STAR material)**
+- Sparse output (NaNs) investigated, not assumed. Diagnostic SQL on `sensitivity_results`
+  disaggregated the two possible causes — missing ingestion vs significance filtering — and
+  confirmed **all 8 sectors are ingested**. Significance coverage: IT 3/3; FMCG/Metal/Nifty50
+  1/3; Banks/Auto/Energy/Pharma 0/3. Conclusion: NaN = "present but no significant beta at
+  α=0.10", not a bug. Day-8 sector enrichment thereby confirmed complete.
+
+**Verification**
+- No runtime/import/DB/schema errors; Stagflation scenario, comparison matrix, dominant-factor
+  attribution, and confidence labels all function.
+
+**Known limitations / usability**
+- Sparse significance reflects limited power (~261-day / ~13-month window, gated by the UR
+  start) + collinear factors — not a defect. Levers: longer window (gate on CPI/IIP only),
+  more history.
+- NaN in the matrix is not self-explaining; in this system it always means "no significant
+  exposure" (all sectors present) — to be narrated explicitly by the Day-10 briefing layer.
