@@ -159,3 +159,58 @@ store with a built-in lookahead guardrail.
   NaN before each indicator's first release (UR starts mid-2025; RepoRate is a single
   value). Returns/changes transform deferred to the analysis layer (Day 6).
 - PLFS UR 2026 Jan/Feb gap persists upstream.
+## Day 6 — Stationary analysis layer & sector sensitivity matrix
+
+**Status:** Complete. Stationary feature layer + HAC-corrected sensitivity matrix in TiDB.
+
+**Decisions**
+- `transforms.py`: per-series stationarity transforms — price/index/FX → log returns;
+  US10Y yield → first difference; CPI/IIP → MoM %; UR/RepoRate → Δ pp. Monthly changes
+  taken at the release step and held constant (state encoding).
+- `build_analysis.py`: derives `analysis_daily` from `features_daily`, applies the analysis
+  window (rows begin where CPI/IIP/UR changes are all present), idempotent full-refresh.
+- `sensitivity_matrix.py`: univariate OLS per (asset, factor); DAILY with Newey-West HAC
+  errors (maxlags=21) against the step-function serial correlation; MONTHLY ordinary-OLS
+  cross-check on month-end aggregates. Auto-detects assets (_ret/_diff) and factors (_chg);
+  long-format results in `sensitivity_results`.
+
+**Friction (STAR material)**
+- `MIN_OBS` lowered 30 → 10 so the monthly validation (~13 obs) could run; daily HAC kept
+  its larger sample. (Caveat retained: monthly betas are low-power.)
+- pandas compatibility: `pd.to_numeric(errors="ignore")` removed in pandas 2.x → replaced
+  with explicit per-column coercion.
+- `RepoRate_chg` skipped gracefully (single value → zero variance in the window).
+
+**Verification**
+- `analysis_daily`: 261 observations (window correctly UR-bound, ~12 months).
+- `sensitivity_results`: 48 rows = 8 assets × 3 factors (RepoRate skipped) × 2 frequencies.
+- Daily and monthly beta matrices both generated.
+
+**Methodology / caveats**
+- Betas = conditional associations under state encoding, HAC-corrected — not causal impact.
+- Univariate (not joint) to keep collinear macro factors interpretable.
+- Small sample: read betas circumspectly; trust cells where daily HAC and monthly agree.
+
+**Known limitations**
+- RepoRate needs more rate-decision history to enter the matrix.
+- PLFS UR 2026 Jan/Feb gap persists upstream.
+- "Assets" are the 8 daily series; NSE sector indices can be added later (auto-detected).
+# Day 6 — Completion Summary
+
+**Objective:** Turn the point-in-time feature store into valid, stationary analysis and
+produce the first sector-sensitivity matrix.
+
+**Delivered**
+- Stationary analysis layer (`analysis_daily`, 261 obs): returns/diffs for markets,
+  release-step changes for macro — removing spurious level-on-level correlation.
+- Sector sensitivity matrix (`sensitivity_results`, 48 rows): HAC-corrected daily betas
+  plus a monthly cross-check, asset × macro-factor.
+
+**What this demonstrates:** econometric rigor — stationarity transforms, point-in-time
+discipline carried through, Newey-West inference for an autocorrelated regressor, and
+multi-frequency robustness checks. Analysis built to survive scrutiny.
+
+**Carried forward:** RepoRate sparsity; UR Jan/Feb gap; optional sector-index enrichment.
+
+**Next (Day 7):** Predictive model on the leak-free feature set — walk-forward validated,
+benchmarked against naive baselines, interpreted honestly.
