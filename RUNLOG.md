@@ -318,3 +318,139 @@ populate true industries (panel currently ranks market-context series).
   more history.
 - NaN in the matrix is not self-explaining; in this system it always means "no significant
   exposure" (all sectors present) — to be narrated explicitly by the Day-10 briefing layer.
+
+  # Day 10: AI Briefing Engine
+
+**Goal:** Turn the three decision-intelligence consumers into a written analyst briefing
+— deterministic by default, optionally narrated by an LLM — without ever letting the
+language layer touch the numbers.
+
+## What shipped
+- `brief_facts.py` — deterministic facts/payload assembler. Pulls current macro state
+  (`ImpactPanel.current_state`), decomposes each sector's implied move into per-factor
+  **contributions** (β×shock) and **shares**, attaches significance stars + an evidence
+  tier, flags **outsized** macro inputs (>2σ vs `analysis_daily` history), builds a factual
+  **headline**, and orders sectors by **evidence, then magnitude**. Pure data out.
+- `ai_briefing.py` — narration layer. `render_template` (no API, always works,
+  fully reproducible) and `render_llm` (optional Anthropic/Claude under a strict grounding
+  prompt; graceful fallback to template if SDK/key missing or call fails).
+
+## Decisions
+- **Hard compute-vs-generate boundary.** The engine owns every number; the LLM owns only
+  language. The grounding prompt forbids inventing/altering values and forbids implying
+  missing data. This is what makes the briefing trustworthy rather than a confident fabrication.
+- **Evidence-then-magnitude ordering** (not magnitude alone). Magnitude was promoting the
+  least-robust readings (IT, Realty) to the top; ranking by evidence tier first demotes noise.
+- **Evidence tier from the *dominant* driver**, not the best p-value across drivers — so a
+  sector with a weak main driver and a tiny significant side-driver can't masquerade as robust.
+- **Show contributions + shares, not raw betas**, in the panel — an analyst needs how much
+  each factor moved the sector *this time*, not the coefficient.
+- **Outsized-input flag** is a z-score (>2σ) against the factor's own history, not a hardcoded
+  threshold — principled and self-calibrating.
+- Default `BRIEFING_MODEL=claude-sonnet-4-6`; `USE_LLM=1` opt-in; `BRIEF_SCENARIO` optional.
+
+## Friction (STAR)
+- **S/T:** First template draft was internally correct but analyst-hostile: it printed raw
+  betas as "drivers," ranked by magnitude, and used tiny unlabeled decimals — so its most
+  prominent reading (IT, up) was also its least trustworthy (β=+0.71 to CPI, p=0.048).
+- **A:** Reviewed economic correctness separately from arithmetic. Math verified (IT sum =
+  +0.0076 ✓). Found FMCG (defensive, p=0.000) and Metals (cyclical, p=0.023) coherent and
+  significant; IT and Realty resting on marginal, counterintuitive betas. Rebuilt the facts
+  layer to disaggregate contributions, surface significance, order by evidence, label units
+  as %, collapse no-exposure sectors, and flag the outsized IIP input (−9% MoM, ~−3σ).
+- **R:** The fragile readings are now explicitly tagged `[Weak/Moderate evidence]` and sit
+  below the `[Strong]` reading; the headline leads with the strongest-evidence sector.
+
+## Verification
+- `python -m py_compile brief_facts.py ai_briefing.py` → clean.
+- Rendered the enriched template against the live run numbers: headline + outsized ⚠ line +
+  per-driver contribution/share/β/p/stars + collapsed no-exposure line all correct.
+- Confirmed graceful fallback: with `ANTHROPIC_API_KEY` unset, `USE_LLM=1` logs a warning
+  and falls back to the deterministic template (identical numbers).
+
+## Known limitations
+- Readings are implied **daily** returns — directional/ordinal, not point forecasts.
+- Linear projection (β×shock); non-linear macro responses not captured.
+- Small sample (~261 daily / ~13 monthly obs); evidence ordering mitigates but doesn't remove
+  the noise risk. Several sector betas remain economically counterintuitive — flagged, not fixed.
+- The outsized-IIP flag is a data-quality prompt, not a correction; the −9% MoM input still
+  needs a base/seasonal sanity-check upstream.
+
+**Status: Day 10 complete.** Three consumers (Impact Panel, What-if Simulator, AI Briefing)
+are all serving from the engine. Next: surface them in an interactive dashboard.
+# RUNLOG — Day 11: Decision-Intelligence Command Center (Streamlit)
+
+**Goal:** Surface the three serving-layer consumers (Impact Panel, What-if Simulator,
+AI Briefing) as a premium, decision-first product — not a research notebook — without
+touching the engine, schema, payload contracts, or identifiers.
+
+## What shipped
+- `streamlit_app.py` — single-scroll dark command center. Hierarchy: live market ribbon →
+  hero regime → release-stamped KPI cards → daily Morning Brief → signal-quality panel →
+  winners/losers → scenario intelligence → business interpretation → methodology.
+- `.streamlit/config.toml` — dark theme (page background was the "unfinished" culprit).
+- `brief_facts.py` — backward-compatible payload ADDITIONS only: `regime`, `regime_badge`,
+  `confidence`, `macro_cards` (level/base/period/release_date/computed YoY), `market_ribbon`,
+  `market_asof`. No renames, no schema or engine change.
+
+## Decisions
+- **Hard presentation/engine separation.** Every number rendered comes from the same
+  `assemble()` payload the CLI uses; the dashboard recomputes nothing.
+- **Two-clock design.** A live daily market ribbon (fast clock) sits above the release-stamped
+  monthly regime (slow clock); each carries its own as-of so neither masquerades as live.
+- **One source of truth.** The command center always pulls the daily payload (the validated
+  path); the frequency control affects only research/sim.
+- **Release-context KPIs.** CPI/IIP as computed YoY over index + base + release period + MoM
+  model input; unemployment as the rate. Level vs change vs daily vs monthly never ambiguous.
+- **Evidence-weighted everywhere.** Ordering, confidence badges, and the brief's
+  "highest-conviction" lead use the dominant-driver evidence tier, not magnitude — so the
+  loudest reading never outranks the best-evidenced one (FMCG leads, not the larger IT move).
+- **Decision-first hierarchy.** p-values, betas, R², correlations, and the α/frequency controls
+  live only in a collapsed "Methodology & validation" section and the collapsed sidebar.
+- **Daily-led Morning Brief.** Rebuilt from a static monthly restatement into a synthesized
+  daily note: market lede → regime backdrop → the model's read → daily-tone tilt → watch item
+  → confidence-with-basis. This is the "not-Gemini" surface — it reads the live tape and the
+  proprietary sensitivity signal, not public headlines.
+- **Show, don't tell.** Briefing detail and business interpretation carry Plotly charts
+  (sector-pressure diverging bars; per-factor contribution decomposition) that re-render with
+  the data, replacing regression-text dumps.
+
+## Friction (STAR)
+- **S/T — silent CLI/dashboard divergence.** The dashboard read "no significant exposure" while
+  the CLI showed FMCG/IT/Metals/Realty.
+- **A.** Traced it: identical `assemble()` call, so the cause was environmental — an empty
+  `analysis_daily` read returns `({}, None)` from `current_state()`, which `_decompose` turns
+  into all-no-exposure, rendered identically to a real null. Three failure modes isolated:
+  stale `@st.cache_data`, `freq="monthly"`, and the silent-empty itself.
+- **R.** Pinned the command center to daily, added a self-healing cache clear on empty reads,
+  and split the empty state into an explicit data/connection error vs a genuine
+  "no significant exposure." One source of truth restored.
+- **Second loop — describe vs reason.** Review feedback: the brief restated monthly facts a
+  generic LLM could produce, and the "full briefing" expander dumped β/p-value text. Rebuilt the
+  brief to lead with the daily tape and surface the proprietary read; replaced text with
+  data-driven charts; corrected the IIP card ("momentum rolling over" from MoM, not the
+  contradictory YoY "positive"); fixed light-on-dark dropdowns and expander headers.
+
+## Verification
+- `py_compile` clean across `streamlit_app.py`, `brief_facts.py`, `ai_briefing.py` at every step.
+- **Cross-surface reconciliation:** brief, KPI cards, sector-pressure chart, contribution
+  decomposition, and signal-quality panel all tie out — e.g., IT +0.76% = CPI(+0.54) + IIP(+0.26)
+  − Unemployment(0.04); "6 significant relationships / 261 observations" identical brief↔panel;
+  IIP −9.03% MoM consistent card↔brief.
+- Every presentation helper unit-checked in isolation against live-shaped payloads (regime pills,
+  KPI interpretations, morning-brief synthesis, signal counts, both chart builders, empty guards).
+
+## Known limitations
+- **No out-of-sample validation yet.** Sensitivities are in-sample; a hold-out/backtest of whether
+  they actually predict is the single highest-value next analytical step.
+- **Two narrative-vs-driver gaps, flagged via low confidence (not hidden):** Realty's generic
+  "financial conditions ease" story doesn't match its actual driver (a negative IIP beta) this
+  regime; IT's headline magnitude rests largely on a marginal CPI beta (p≈0.05). Both are
+  de-emphasized by the evidence ordering and confidence badges; the decomposition chart shows
+  IT's CPI dependence explicitly.
+- **Streamlit styling ceiling** (~85–90% of a bespoke React build); the final chrome slice would
+  need Path B (React + FastAPI), parked as a post-offer stretch.
+
+**Status: Day 11 ✅ complete.** The platform presents as a decision-intelligence command center,
+internally consistent and analytically honest. Next: out-of-sample signal validation, then the
+narrative layer (README, BRD, demo script) that makes the rigor legible to a two-minute reviewer.

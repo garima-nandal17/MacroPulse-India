@@ -8,3 +8,5 @@ python-dotenv>=1.0
 statsmodels>=0.14
 scipy>=1.11
 anthropic>=0.40  # optional: LLM-narrated briefings
+streamlit>=1.45
+plotly>=5.0

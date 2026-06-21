@@ -46,6 +46,25 @@ def _regime(ms):
     return "mixed"
 
 
+def _regime_badge(ms):
+    """Compact two-axis regime label for the hero badge, e.g. 'Contractionary + inflationary'."""
+    cpi, iip = ms.get("CPI_chg", 0.0), ms.get("IIP_chg", 0.0)
+    growth = "Contractionary" if iip < 0 else "Expansionary" if iip > 0 else "Neutral"
+    infl = "inflationary" if cpi > 0 else "disinflationary" if cpi < 0 else None
+    return f"{growth} + {infl}" if infl else growth
+
+
+def _confidence(active, outsized):
+    """Overall read confidence: best active-sector evidence, downgraded one notch if a
+    macro input is outsized (a data-quality caveat that should temper certainty)."""
+    if not active:
+        return "low"
+    base = {"Strong": "high", "Moderate": "medium", "Weak": "low"}[active[0]["evidence"]]
+    if outsized and base == "high":
+        return "medium"
+    return base
+
+
 def _decompose(engine, macro_state, freq, alpha):
     b = engine.betas
     active, no_exposure = [], []
@@ -85,6 +104,79 @@ def _outsized(conn, macro_state):
     return flags
 
 
+_CARD_INDICATORS = [
+    ("CPI", "Inflation (CPI)", "index", "CPI_chg"),
+    ("IIP", "Industrial production", "index", "IIP_chg"),
+    ("Unemployment", "Unemployment", "rate", "Unemployment_chg"),
+]
+
+
+def _macro_cards(conn, macro_state):
+    """Release-context for the KPI cards: level, base year, release period/date, computed YoY
+    (index series only — exact 12-month-prior lookup, needs that month present), and the
+    model-input change. Keeps level and change unambiguous so neither reads as a live value."""
+    cards = []
+    for ind, label, kind, chg_key in _CARD_INDICATORS:
+        df = _query_df(conn, "SELECT period, value, release_date, base_year "
+                             f"FROM monthly_indicators WHERE indicator = '{ind}' ORDER BY period")
+        if df.empty:
+            continue
+        df["period"] = pd.to_datetime(df["period"], errors="coerce")
+        df["value"] = pd.to_numeric(df["value"], errors="coerce")
+        df = df.dropna(subset=["period", "value"]).sort_values("period")
+        if df.empty:
+            continue
+        latest = df.iloc[-1]
+        yoy = None
+        if kind == "index":
+            prior = df[df["period"] == latest["period"] - pd.DateOffset(years=1)]
+            if not prior.empty:
+                pv = float(prior.iloc[-1]["value"])
+                if pv:
+                    yoy = float(latest["value"]) / pv - 1.0
+        chg = macro_state.get(chg_key)
+        rel = latest["release_date"]
+        cards.append({
+            "indicator": ind, "label": label, "kind": kind,
+            "level": float(latest["value"]),
+            "base_year": (None if pd.isna(latest["base_year"]) else str(latest["base_year"])),
+            "period": str(latest["period"].date()),
+            "period_label": latest["period"].strftime("%b %Y"),
+            "release_date": (None if pd.isna(rel) else str(rel)),
+            "yoy": yoy,
+            "model_chg": (float(chg) if chg is not None else None),
+            "model_unit": ("pp" if ind == "Unemployment" else "MoM"),
+        })
+    return cards
+
+
+_RIBBON = ["USDINR", "Nifty50", "BankNifty", "Gold", "BrentCrude", "IndiaVIX", "DXY", "US10Y"]
+_RIBBON_LABEL = {"USDINR": "USD/INR", "Nifty50": "NIFTY 50", "BankNifty": "Bank Nifty", "Gold": "Gold",
+                 "BrentCrude": "Brent", "IndiaVIX": "India VIX", "DXY": "DXY", "US10Y": "US 10Y"}
+
+
+def _market_ribbon(conn):
+    """Live daily market layer (the fast clock) — latest value + daily % change per ticker,
+    with one trading-day stamp. Kept separate from the monthly release-based regime cards."""
+    df = _query_df(conn, "SELECT indicator, value, pct_change, date FROM daily_indicators "
+                         "WHERE (indicator, date) IN "
+                         "(SELECT indicator, MAX(date) FROM daily_indicators GROUP BY indicator)")
+    if df.empty:
+        return [], None
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    items, asof = [], None
+    for ind in _RIBBON:
+        r = df[df["indicator"] == ind]
+        if r.empty:
+            continue
+        row = r.iloc[0]
+        asof = row["date"] if asof is None else max(asof, row["date"])
+        items.append({"indicator": ind, "label": _RIBBON_LABEL[ind],
+                      "value": (None if pd.isna(row["value"]) else float(row["value"])),
+                      "pct": (None if pd.isna(row["pct_change"]) else float(row["pct_change"]))})
+    return items, (str(asof.date()) if asof is not None else None)
+
+
 def assemble(scenario_name=None, freq="daily", alpha=0.10, conn=None):
     own = conn is None
     conn = conn or get_connection()
@@ -95,13 +187,18 @@ def assemble(scenario_name=None, freq="daily", alpha=0.10, conn=None):
 
         active, no_exposure = _decompose(engine, macro_state, freq, alpha)
         outsized = _outsized(conn, macro_state)
+        macro_cards = _macro_cards(conn, macro_state)
+        market_ribbon, market_asof = _market_ribbon(conn)
 
         cpi = macro_state.get("CPI_chg", 0.0)
         iip = macro_state.get("IIP_chg", 0.0)
         ur = macro_state.get("Unemployment_chg", 0.0)
+        regime = _regime(macro_state)
+        regime_badge = _regime_badge(macro_state)
+        confidence = _confidence(active, outsized)
         lead = (f"strongest-evidence reading is {active[0]['sector']} {active[0]['direction']} "
                 f"[{active[0]['evidence']}]") if active else "no sector shows significant exposure"
-        headline = (f"Macro is {_regime(macro_state)}: CPI {cpi:+.2%} MoM, IIP {iip:+.2%} MoM, "
+        headline = (f"Macro is {regime}: CPI {cpi:+.2%} MoM, IIP {iip:+.2%} MoM, "
                     f"unemployment {ur:+.2f}pp — {lead}.")
 
         b = engine.betas
@@ -126,7 +223,9 @@ def assemble(scenario_name=None, freq="daily", alpha=0.10, conn=None):
         ]
         return {
             "asof": str(asof), "freq": freq, "headline": headline,
-            "macro_state": macro_state, "outsized_factors": outsized,
+            "regime": regime, "regime_badge": regime_badge, "confidence": confidence,
+            "macro_state": macro_state, "macro_cards": macro_cards, "outsized_factors": outsized,
+            "market_ribbon": market_ribbon, "market_asof": market_asof,
             "active_sectors": active, "no_exposure_sectors": no_exposure,
             "significant_sensitivities": sig.to_dict("records") if not sig.empty else [],
             "scenario": scenario,
