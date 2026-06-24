@@ -40,7 +40,7 @@ Most analytics portfolios stop at "I built a dashboard." MacroPulse goes three s
 
 ---
 
-## 🩺 The problem it solves
+##  The problem it solves
 
 Macroeconomic data is **abundant but illegible**. A business leader, analyst, or investor can see that inflation is up and factory output is down — but translating that into *"which parts of the economy are likely to hold up, and which are exposed?"* requires economics fluency, statistical modelling, and constant manual updating.
 
