@@ -66,7 +66,7 @@ MacroPulse closes that gap. It continuously answers three questions a decision-m
 
 ---
 
-## 🏛️ Architecture
+##  Architecture
 
 A layered pipeline: raw sources → cloud database → point-in-time features → a stationary analysis layer → the sensitivity engine → four serving components → the dashboard. Each layer is independently testable, and macro releases are aligned by **release date** (never by reference month) so the model can never "see the future."
 
@@ -143,7 +143,7 @@ In-sample significance is not enough — a relationship can fit the data it was 
 
 ---
 
-## 🛠️ Tech stack
+##  Tech stack
 
 **Language & analysis:** Python · pandas · NumPy · statsmodels (OLS, HAC)
 **Storage:** TiDB Cloud (MySQL-compatible, TLS)
@@ -153,7 +153,7 @@ In-sample significance is not enough — a relationship can fit the data it was 
 
 ---
 
-## ▶️ Run it locally
+##  Run it locally
 
 ```bash
 # 1. Clone and install
@@ -178,7 +178,7 @@ streamlit run streamlit_app.py
 
 ---
 
-## 🗂️ Project structure
+##  Project structure
 
 ```
 MacroPulse-India/
@@ -196,26 +196,6 @@ MacroPulse-India/
 ├── .github/workflows/                   # daily.yml · monthly.yml (CI automation)
 └── RUNLOG_DAY*.md                       # decision logs (the "why" behind each build day)
 ```
-
----
-
-## 🎓 About this project
-
-I built MacroPulse as an **economist learning to engineer**. My background is in economics, and the platform reflects that lens at every layer: the goal is never a regression for its own sake, but *what a macroeconomic shift means for real businesses and sectors* — framed for a decision-maker, validated like a researcher, and explained for a non-specialist.
-
-It is the centrepiece of a portfolio aimed at **data analyst / business analyst roles** and **graduate study in data science / applied economics**, and it deliberately demonstrates the things those paths value most: point-in-time discipline, out-of-sample honesty, stakeholder-ready communication, and end-to-end ownership from raw API to deployed product.
-
----
-
-##  Roadmap
-
-- [x] Out-of-sample signal validation & in-product trust layer
-- [x] AI copilot explanation layer
-- [ ] **Business Requirements Document** (users, value, requirements, success metrics)
-- [ ] **Recruiter demo script** & interview narrative
-- [ ] Macro-regime classifier (label the environment from factors)
-- [ ] Macro-surprise modelling (actual vs consensus reactions)
-
 ---
 
 <sub>Built and maintained by **Garima Nandal** · [GitHub](https://github.com/garima-nandal17) · A decision-intelligence project, honestly benchmarked.</sub>
