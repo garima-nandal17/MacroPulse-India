@@ -29,7 +29,7 @@
 
 ---
 
-##  Why this project is different (30-second version)
+##  Why this project is different 
 
 Most analytics portfolios stop at "I built a dashboard." MacroPulse goes three steps further:
 
@@ -117,7 +117,7 @@ flowchart TD
 
 ---
 
-##  Methodology & validation — the part that matters
+##  Methodology & validation
 
 The analytical core is a **sector-sensitivity matrix**: for each NSE sector and each macro factor, a univariate regression of the sector's stationary return on the factor's change, `rᵢ = a + b·mⱼ`. Three deliberate choices make it defensible:
 
