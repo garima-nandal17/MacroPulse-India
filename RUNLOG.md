@@ -454,3 +454,85 @@ touching the engine, schema, payload contracts, or identifiers.
 **Status: Day 11 ✅ complete.** The platform presents as a decision-intelligence command center,
 internally consistent and analytically honest. Next: out-of-sample signal validation, then the
 narrative layer (README, BRD, demo script) that makes the rigor legible to a two-minute reviewer.
+# RUNLOG — Day 12: Out-of-Sample Validation + AI Copilot Explanation Layer
+
+**Two goals this day.** (1) Answer the question the platform had dodged — *do the signals hold
+out of sample, or are they in-sample artifacts?* (2) Close the usability gap so a non-economist
+(student, recruiter, manager) can understand every concept without leaving the page.
+
+## What shipped
+- `validate_signals.py` — monthly, point-in-time, walk-forward + holdout out-of-sample validation;
+  writes the `signal_validation` table; ships a synthetic self-test.
+- `streamlit_app.py` — (a) AI copilot explanation layer: ten section popovers with a custom glyph
+  and plain-English *concept → meaning → business implication* panels; (b) validation integration:
+  verdict chips on winner/loser cards, a Signal-Quality headline, a Methodology validation table,
+  and copilot notes.
+
+## Decisions
+### Out-of-sample validation
+- **Monthly, not daily.** The `*_chg` factors are month-level step functions broadcast across ~21
+  daily rows; a daily split would leak the same constant factor value into train and test and
+  pseudo-replicate ~21x, faking a good OOS score. Validating on month-end aggregates — reusing
+  `sensitivity_matrix.to_monthly` verbatim — gives genuinely independent observations.
+- **Same model as production.** Univariate OLS `r_i = a + b*m_j`; HAC affects only standard errors,
+  not the beta point estimate, so the coefficient validated is the one the product ships.
+- **Two tests:** holdout (first ~70% of months vs last ~30%) and expanding-window walk-forward
+  (one-step out-of-sample at each step).
+- **Honest metric.** Campbell-Thompson OOS R² vs a naive train-mean benchmark (can go negative =>
+  worse than guessing the average), directional hit-rate on demeaned moves, and beta sign-stability.
+  A signal is "validated" only if it clears all three bars; tiers are validated / partial /
+  in-sample only / insufficient.
+
+### AI copilot explanation layer
+- **Curated knowledge layer, not live LLM.** Concept definitions are stable, so curated text is
+  instant, vetted, hallucination-free, and needs no API key for a recruiter to try every panel. The
+  live-generation hook remains in `ai_briefing.py`.
+- **Native `st.popover`, not raw HTML.** The first implementation used HTML `<details>` + inline
+  `<svg>`; Streamlit's sanitizer strips both, so nothing rendered. Rebuilt on `st.popover`
+  (sanitizer-proof), with the custom glyph delivered via a CSS background-SVG (also sanitizer-proof)
+  and a version-proof fallback to `st.expander`.
+- Every panel follows *concept → plain-English meaning → business implication*; the regime panel is
+  generated dynamically so it always matches the live pills.
+
+### Validation → dashboard integration
+- **Chips on the cards**, keyed to each sector's dominant driver's verdict — putting the two
+  witnesses (in-sample confidence + out-of-sample robustness) side by side where the call is made.
+- Signal-Quality headline ("N of M validated out-of-sample"), Methodology table, copilot notes.
+- **Graceful degradation:** if `signal_validation` isn't built, chips silently omit and the
+  dashboard is unaffected.
+
+## Friction (STAR)
+- **AI layer rendered no icons at all.** *A:* diagnosed Streamlit's `st.markdown` sanitizer stripping
+  `<details>`/`<summary>`/`<svg>` (the rest of the dashboard survives because it's `<div>`/`<span>`).
+  *R:* rebuilt on `st.popover`, moved the glyph to a CSS background-SVG, added an `st.expander`
+  fallback. Icons now render and open glowing panels.
+- **Validation first run broke on data prep.** Deprecated `pd.to_numeric(..., errors="ignore")` under
+  current pandas, plus a `date`→NaT coercion that broke monthly aggregation. *R:* preserved the
+  `date` column during numeric coercion; validation then ran clean on the real data through the
+  production `to_monthly`.
+
+## Verification
+- **Self-test (no DB):** a true signal (β≈2) validates (OOS R²≈+0.96, hit 0.88); pure noise does not
+  (OOS R²≈−0.62, hit 0.25). The negative OOS R² on noise confirms the metric exposes in-sample-only
+  signals.
+- **Real run (11 shipped signals):** 3 validated, 8 partial, 0 in-sample only. **FMCG×IIP — the
+  dominant driver behind the headline call — validated.** Nifty50×IIP validated (wf_r² +0.107, 86%
+  hit). **IT×IIP holdout R²≈−24 with stable sign and decent direction => IT's direction is
+  trustworthy but its magnitude is not** — evidence-backed confirmation of the IT caution previously
+  only suspected.
+- **Dashboard:** `py_compile` clean; asset→sector mapping and chip rendering unit-tested
+  (FMCG→validated chip, IT→partial chip, unknown sector→no chip, empty table→graceful).
+
+## Known limitations
+- **n ≈ 13 monthly observations** — an early robustness read, not proof. "0 in-sample-only" is partly
+  an artifact of the small sample plus the lenient "partial" bucket; the metrics will sharpen as
+  history accrues. The defensible claim is "no shipped signal failed outright, and the most-relied-on
+  signal validated," not "everything is proven."
+- Validation is of **contemporaneous sensitivities** (stability / generalization), not lead-lag
+  forecasting skill.
+- Streamlit popover *surface* styling is best-effort across versions; the panel *content* is
+  high-contrast regardless.
+
+**Status: Day 12 ✅ complete.** The platform now validates its own signals out-of-sample and explains
+every concept in plain English. Next (roadmap): Power BI; the Day-14 BRD; README + demo script +
+portfolio storytelling.

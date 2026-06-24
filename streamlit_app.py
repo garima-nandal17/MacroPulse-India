@@ -19,6 +19,7 @@ from impact_panel import SECTOR_LABELS
 from whatif_simulator import WhatIfSimulator, SCENARIOS
 from brief_facts import assemble
 from ai_briefing import render_template, render_llm
+from fetch_daily import get_connection
 
 st.set_page_config(page_title="MacroPulse India", page_icon="📈",
                    layout="wide", initial_sidebar_state="collapsed")
@@ -40,23 +41,25 @@ SECTOR_ARCHETYPE = {
     "Banks": "Financials", "Auto": "Cyclical / consumer", "Pharma": "Defensive / healthcare",
     "Energy": "Cyclical / commodity", "Realty": "Rate-sensitive / cyclical", "Nifty50": "Broad market",
 }
+# Curated copy is keyed by (sector, dominant factor) so it is only used when that factor is
+# actually driving the sector. Any other case falls back to a driver-accurate generated line —
+# so the narrative can never assert a mechanism that isn't operating this regime.
 SECTOR_STORY = {
-    "FMCG": {"up": "Historically resilient during industrial slowdowns.",
-             "down": "Tends to lag when growth and discretionary demand accelerate."},
-    "IT": {"up": "Export earnings benefit when the rupee softens alongside inflation.",
-           "down": "Export-led names soften when domestic demand outpaces global demand."},
-    "Metals": {"up": "Cyclical demand firms as industrial activity and employment improve.",
-               "down": "Vulnerable as industrial output and labour conditions weaken."},
-    "Banks": {"up": "Credit demand firms as activity and employment improve.",
-              "down": "Credit growth and asset quality pressured as activity slows."},
-    "Auto": {"up": "Discretionary demand rises with improving incomes and activity.",
-             "down": "Big-ticket discretionary demand cools as activity softens."},
-    "Pharma": {"up": "Defensive healthcare demand holds steady through the cycle.",
-               "down": "Defensives can lag in a strong cyclical upswing."},
-    "Energy": {"up": "Commodity-linked names benefit as industrial demand strengthens.",
-               "down": "Commodity demand eases as industrial activity weakens."},
-    "Realty": {"up": "Rate-sensitive demand improves as financial conditions ease.",
-               "down": "Rate-sensitive demand softens as financial conditions tighten."},
+    ("FMCG", "IIP_chg"): "Historically resilient when industrial output weakens.",
+    ("IT", "CPI_chg"): "Export earnings benefit as the rupee softens alongside inflation.",
+    ("IT", "IIP_chg"): "Export-led demand is relatively insulated from domestic output.",
+    ("Metals", "Unemployment_chg"): "Vulnerable as labour conditions soften.",
+    ("Metals", "IIP_chg"): "Cyclical demand tracks industrial output.",
+    ("Banks", "Unemployment_chg"): "Asset quality tracks the labour market.",
+    ("Banks", "IIP_chg"): "Credit demand tracks industrial activity.",
+    ("Auto", "IIP_chg"): "Discretionary demand tracks industrial activity.",
+    ("Pharma", "IIP_chg"): "Defensive healthcare demand holds through the cycle.",
+    ("Energy", "IIP_chg"): "Commodity-linked demand tracks industrial activity.",
+}
+FACTOR_MOVE = {  # (shock > 0 phrasing, shock < 0 phrasing)
+    "CPI_chg": ("inflation rises", "inflation eases"),
+    "IIP_chg": ("industrial output strengthens", "industrial output weakens"),
+    "Unemployment_chg": ("labour conditions soften", "labour conditions tighten"),
 }
 SCENARIO_CARDS = [
     ("Stagflation", "Stagflation", "🟥", "Weak growth · sticky inflation"),
@@ -78,6 +81,130 @@ def _rgba(hex_color, a):
     return f"rgba({int(h[0:2],16)},{int(h[2:4],16)},{int(h[4:6],16)},{a})"
 
 
+# --- AI copilot explanation layer -------------------------------------------
+# Custom MacroPulse glyph: a hexagonal "chip" with a pulse waveform + AI spark.
+AI_ICON = (
+    '<svg class="mp-ai-glyph" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">'
+    '<path d="M12 2.2 19.5 6.6 V15.4 L12 19.8 4.5 15.4 V6.6 Z" stroke="#00F5D4" stroke-width="1.3" '
+    'stroke-linejoin="round"/>'
+    '<path d="M6.6 12 H9 L10.4 8.7 13.4 15 14.8 12 H17.2" stroke="#00F5D4" stroke-width="1.5" '
+    'stroke-linecap="round" stroke-linejoin="round"/>'
+    '<path d="M18.7 2.6 19.2 4.1 20.7 4.6 19.2 5.1 18.7 6.6 18.2 5.1 16.7 4.6 18.2 4.1 Z" fill="#00F5D4"/>'
+    '</svg>'
+)
+
+# Each explanation: plain-English meaning, then a business implication (.imp).
+# Jargon-free by design — concept → meaning → "so what".
+AI_EXPLAIN = {
+    "market_pulse":
+        "This strip shows how the big markets moved today — the rupee, stock indexes (Nifty, Bank Nifty), "
+        "gold, oil, and a 'fear gauge' called India VIX. Green is up, red is down. "
+        "<span class='imp'><b>Why it matters:</b> together they reveal the day's mood — when the fear gauge "
+        "jumps and stocks fall, markets are nervous; when stocks rise and the rupee firms, they're confident.</span>",
+    "kpi":
+        "These three gauges describe the economy's health. <b>Inflation (CPI)</b> is how fast prices are "
+        "rising. <b>Industrial production (IIP)</b> is how much factories are making — a stand-in for growth. "
+        "<b>Unemployment</b> is the share of people who want work but can't find it. ‘YoY’ compares with a year "
+        "ago; ‘MoM’ compares with last month. "
+        "<span class='imp'><b>So what:</b> read together they tell you if the economy is speeding up or slowing, "
+        "and whether prices are under control.</span>",
+    "morning_brief":
+        "A plain-language summary of the day — what moved in markets, what the wider economy looks like, and "
+        "which business sectors the model sees as favoured or exposed right now. "
+        "<span class='imp'><b>So what:</b> it's the one-paragraph ‘what's going on and why it matters’ you'd want "
+        "before a meeting.</span>",
+    "signal_quality":
+        "This panel shows how much to trust today's read. It lists how many days of history the analysis used, "
+        "how many sector relationships were strong enough to be reliable (not just chance), and an overall "
+        "confidence level. It also reports how many signals <b>validated out-of-sample</b> — i.e. still "
+        "worked when tested on months the model never trained on. "
+        "<span class='imp'><b>Why it matters:</b> more history and more strong, out-of-sample-validated "
+        "relationships mean a more dependable signal — it's the ‘how sure are we?’ behind every other number "
+        "here.</span>",
+    "beneficiaries":
+        "Sectors that have historically tended to <b>hold up or gain ground</b> in conditions like today's, based "
+        "on how each responds to moves in inflation, factory output, and jobs. The badge shows how strong the "
+        "evidence is. <b>Consumer-defensive</b> names (food, household essentials) and <b>export-oriented</b> ones "
+        "(software services earning in dollars) often sit here when growth slows. "
+        "A <b>Validated OOS</b> chip means the relationship still held when tested on data the model "
+        "hadn't seen; <b>Partial</b> means it's promising but not yet confirmed given limited history. "
+        "<span class='imp'><b>Important:</b> this is a relative, historical tendency — not a guarantee or a buy "
+        "recommendation.</span>",
+    "under_pressure":
+        "Sectors that have historically tended to <b>struggle</b> in conditions like today's — usually "
+        "<b>cyclical</b> businesses (metals, big-ticket goods) whose demand rises and falls with the economy. "
+        "These are where weaker demand or higher costs have bitten first. "
+        "The <b>Validated / Partial</b> chip shows whether the relationship survived out-of-sample testing. "
+        "<span class='imp'><b>Important:</b> like beneficiaries, this is about relative pressure and past patterns, "
+        "not a prediction that share prices will fall.</span>",
+    "scenario":
+        "A ‘what-if’ tool. Pick an economic scenario — or build your own — and see which sectors have historically "
+        "benefited or suffered under it. <b>Stagflation</b> = slow growth with high inflation. <b>Growth "
+        "recovery</b> = activity speeding up. <b>Industrial slowdown</b> = factories cooling. <b>Disinflation</b> = "
+        "price rises easing. "
+        "<span class='imp'><b>So what:</b> it lets you stress-test the economy before it happens.</span>",
+    "business_interpretation":
+        "This turns the data into a few takeaways a manager or investor could actually act on — where strength and "
+        "weakness are likely to show up first, and what that implies for positioning. "
+        "<span class='imp'><b>So what:</b> it's the bridge from ‘here are the numbers’ to ‘what should I think "
+        "about?’</span>",
+    "methodology":
+        "The ‘show your work’ section. It holds the statistics behind every claim — how strongly each sector moves "
+        "with each economic factor, and how confident we are that the link is real rather than coincidence. "
+        "It also holds the <b>out-of-sample validation</b> — whether each signal still worked on data the model "
+        "never saw. "
+        "<span class='imp'><b>Why it matters:</b> you don't need it to use the dashboard, but it's there so the "
+        "insights can be checked and trusted.</span>",
+}
+
+
+def regime_explanation(ms):
+    """Dynamic plain-English read of the CURRENT regime so it always matches the pills."""
+    iip, cpi = ms.get("IIP_chg", 0.0), ms.get("CPI_chg", 0.0)
+    growth = "slowing" if iip < 0 else "picking up" if iip > 0 else "roughly flat"
+    prices = "still rising" if cpi > 0 else "easing" if cpi < 0 else "broadly steady"
+    head = f"Right now the economy looks like it's <b>{growth}</b> while prices are <b>{prices}</b>. "
+    if iip < 0 and cpi > 0:
+        tail = ("That's a tough mix — demand can weaken even as costs stay high, squeezing businesses and "
+                "households at once.<span class='imp'><b>So what:</b> steady ‘everyday essentials’ businesses "
+                "have historically held up better than cyclical ones like metals or big-ticket goods here.</span>")
+    elif iip > 0 and cpi > 0:
+        tail = ("Growth and prices are rising together — often a heating economy.<span class='imp'><b>So what:</b> "
+                "cyclical and industrial businesses tend to do relatively well, though high inflation can "
+                "eventually bite.</span>")
+    elif iip < 0 and cpi < 0:
+        tail = ("Both growth and prices are cooling. Lower inflation eases pressure on households, but soft demand "
+                "weighs on earnings.<span class='imp'><b>So what:</b> rate-sensitive and consumption names often "
+                "fare better as conditions loosen.</span>")
+    elif iip > 0 and cpi < 0:
+        tail = ("A favourable mix — activity improving while price pressure eases (a ‘soft landing’)."
+                "<span class='imp'><b>So what:</b> this backdrop tends to support a broad range of businesses, "
+                "especially cyclicals.</span>")
+    else:
+        tail = ("The signals are mixed.<span class='imp'><b>So what:</b> positioning stays balanced until the "
+                "picture sharpens.</span>")
+    return head + tail
+
+
+def ai_panel_html(key, body=None, q="What does this mean?"):
+    """Inner HTML for the popover (plain divs/spans survive Streamlit's sanitizer)."""
+    text = body if body is not None else AI_EXPLAIN.get(key, "")
+    return (f'<div class="mp-ai-head">MacroPulse AI</div>'
+            f'<div class="mp-ai-q">{q}</div>'
+            f'<div class="mp-ai-a">{text}</div>')
+
+
+def ai_header(title_html, key, body=None, ratio=(0.84, 0.16)):
+    """Render a section heading with a glowing 'Explain' AI popover beside it.
+    Falls back to an expander on Streamlit builds without st.popover."""
+    c1, c2 = st.columns(list(ratio))
+    c1.markdown(title_html, unsafe_allow_html=True)
+    has_popover = hasattr(st, "popover")
+    container = c2.popover("Explain") if has_popover else c2.expander("Explain")
+    with container:
+        st.markdown(ai_panel_html(key, body), unsafe_allow_html=True)
+
+
 CSS = f"""
 <style>
 .stApp{{background:#0B1020;}}
@@ -91,12 +218,12 @@ CSS = f"""
 .mp-ribbon::-webkit-scrollbar{{height:5px;}} .mp-ribbon::-webkit-scrollbar-thumb{{background:#23324a;border-radius:9px;}}
 .mp-tick{{font-size:13px;color:#E6EDF6;white-space:nowrap;padding:2px 16px;border-right:1px solid #1c2a40;flex:0 0 auto;}}
 .mp-tick:last-child{{border-right:none;}}
-.mp-tick b{{color:#A9BCD0;font-weight:600;margin-right:7px;font-size:11.5px;letter-spacing:.03em;}}
+.mp-tick b{{color:#7d93ab;font-weight:600;margin-right:7px;font-size:11.5px;letter-spacing:.03em;}}
 .mp-asof{{color:#5f7488;font-size:12px;}}
 .mp-hero{{display:flex;justify-content:space-between;align-items:center;gap:18px;flex-wrap:wrap;margin:.2rem 0 1.4rem;padding:28px 32px;}}
-.mp-eyebrow{{font-size:13px;color:#A9BCD0;letter-spacing:.16em;text-transform:uppercase;}}
+.mp-eyebrow{{font-size:13px;color:#7d93ab;letter-spacing:.16em;text-transform:uppercase;}}
 .mp-name{{font-size:42px;font-weight:800;color:#fff;line-height:1.04;margin:5px 0 2px;letter-spacing:-.01em;}}
-.mp-sub{{font-size:12px;color:#5f7488;letter-spacing:.18em;text-transform:uppercase;margin:12px 0 12px;}}
+.mp-sub{{font-size:12px;color:#93a7be;letter-spacing:.18em;text-transform:uppercase;margin:12px 0 12px;}}
 .mp-rpill{{display:inline-block;font-size:22px;font-weight:800;letter-spacing:.02em;text-transform:uppercase;
   padding:11px 20px;border-radius:13px;margin:0 10px 8px 0;animation:rpulse 2.8s ease-in-out infinite;}}
 @keyframes rpulse{{0%,100%{{box-shadow:0 0 15px var(--g);}}50%{{box-shadow:0 0 32px var(--g);}}}}
@@ -106,21 +233,21 @@ CSS = f"""
 .mp-kpi{{padding:16px 18px;border-radius:16px;min-height:138px;background:rgba(17,24,39,.5);
   border:1px solid rgba(255,255,255,.06);transition:transform .15s ease,border-color .15s ease;}}
 .mp-kpi:hover{{transform:translateY(-2px);border-color:rgba(0,245,212,.35);}}
-.mp-kpi .lab{{font-size:12.5px;color:#A9BCD0;}}
+.mp-kpi .lab{{font-size:12.5px;color:#aebfd2;}}
 .mp-kpi .val{{font-size:26px;font-weight:800;margin-top:5px;}}
 .mp-kpi .kint{{font-size:13.5px;font-weight:600;margin-top:4px;}}
-.mp-kpi .cap{{font-size:11.5px;color:#A9BCD0;margin-top:5px;}}
+.mp-kpi .cap{{font-size:11.5px;color:#9aafc4;margin-top:5px;}}
 .mp-brief{{padding:28px 34px;margin:.2rem 0 1rem;border-left:3px solid #00F5D4;
   box-shadow:0 8px 34px rgba(0,0,0,.4),0 0 44px rgba(0,245,212,.07);}}
 .mp-brief .ttl{{font-size:13px;color:#00F5D4;letter-spacing:.18em;text-transform:uppercase;margin-bottom:14px;}}
 .mp-brief .ln{{font-size:23px;line-height:1.5;color:#F2F6FB;font-weight:500;margin:0 0 6px;}}
-.mp-brief .conf{{font-size:14px;color:#8aa0b8;margin-top:14px;}}
+.mp-brief .conf{{font-size:14px;color:#a3b6c9;margin-top:14px;}}
 .mp-brief .lnb{{font-size:18px;line-height:1.55;color:#d7e2ee;margin:0 0 9px;}}
 .mp-brief .lnw{{font-size:15px;line-height:1.5;color:#00F5D4;font-weight:500;margin:14px 0 2px;}}
 .mp-flag{{display:inline-block;font-size:15px;font-weight:800;letter-spacing:.05em;color:#fff;
   background:linear-gradient(135deg,#FF9933,#0B7A3B);padding:3px 10px;border-radius:7px;margin-right:13px;vertical-align:middle;}}
 .mp-sq{{padding:16px 22px;margin-bottom:1rem;display:flex;flex-wrap:wrap;gap:8px 26px;align-items:center;}}
-.mp-sq .h{{font-size:12px;color:#A9BCD0;letter-spacing:.16em;text-transform:uppercase;width:100%;margin-bottom:2px;}}
+.mp-sq .h{{font-size:12px;color:#a6b8cc;letter-spacing:.16em;text-transform:uppercase;width:100%;margin-bottom:2px;}}
 .mp-sq .it{{font-size:13.5px;color:#c7d6e6;display:inline-flex;align-items:center;gap:7px;}}
 .mp-sq .ck{{color:#22C55E;}}
 .mp-wl{{padding:16px 18px;border-radius:16px;margin-bottom:12px;min-height:140px;background:rgba(17,24,39,.5);
@@ -129,10 +256,12 @@ CSS = f"""
 .mp-wl-h{{display:flex;align-items:center;justify-content:space-between;gap:8px;}}
 .mp-wl-name{{font-size:20px;font-weight:700;color:#fff;display:flex;align-items:center;}}
 .mp-badge{{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding:3px 10px;border-radius:999px;border:1px solid;}}
-.mp-wl-arch{{font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:#A9BCD0;margin:7px 0 7px;}}
+.mp-vchip{{display:inline-block;font-size:10.5px;font-weight:700;letter-spacing:.03em;padding:3px 10px;
+  border-radius:999px;border:1px solid;}}
+.mp-wl-arch{{font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:#a6b8cc;margin:7px 0 7px;}}
 .mp-wl-story{{font-size:14px;line-height:1.5;color:#c7d6e6;}}
 .dot{{width:11px;height:11px;border-radius:50%;display:inline-block;}}
-.sec-h{{font-size:14px;font-weight:600;color:#9fb3c8;letter-spacing:.14em;text-transform:uppercase;margin:2rem 0 .8rem;}}
+.sec-h{{font-size:14px;font-weight:700;color:#bccadb;letter-spacing:.14em;text-transform:uppercase;margin:2rem 0 .8rem;}}
 .mp-pill{{display:inline-block;font-size:12.5px;padding:5px 12px;border-radius:9px;margin:0 6px 6px 0;
   background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);color:#dce7f3;}}
 .stButton>button{{background:rgba(17,24,39,.6);border:1px solid rgba(255,255,255,.09);border-radius:13px;
@@ -149,6 +278,36 @@ ul[role="listbox"]{{background:#111827!important;}}
 [data-baseweb="popover"] li{{background:#111827!important;color:#cfe0f2!important;}}
 [data-baseweb="popover"] li:hover{{background:#1c2a40!important;}}
 h1,h2,h3,h4{{color:#e6edf6;}}
+[data-testid="stVerticalBlock"],[data-testid="stElementContainer"]{{overflow:visible;}}
+/* ---- AI copilot explanation layer (st.popover based) ---- */
+[data-testid="stPopover"] button{{background:rgba(0,245,212,.08) !important;
+  border:1px solid rgba(0,245,212,.4) !important;border-radius:999px !important;color:#00F5D4 !important;
+  font-size:11px !important;font-weight:700 !important;letter-spacing:.06em !important;
+  text-transform:uppercase !important;padding:3px 13px !important;min-height:0 !important;
+  line-height:1.5 !important;transition:all .18s ease;}}
+[data-testid="stPopover"] button:hover{{background:rgba(0,245,212,.18) !important;
+  box-shadow:0 0 16px rgba(0,245,212,.45) !important;color:#bafdf4 !important;
+  border-color:rgba(0,245,212,.7) !important;}}
+[data-testid="stPopover"] button p{{font-size:11px !important;font-weight:700 !important;
+  letter-spacing:.06em !important;}}
+[data-testid="stPopover"] button::before{{content:"";display:inline-block;width:14px;height:14px;
+  margin-right:7px;vertical-align:-2px;filter:drop-shadow(0 0 4px rgba(0,245,212,.75));
+  background:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none'><path d='M12 2.2 19.5 6.6V15.4L12 19.8 4.5 15.4V6.6Z' stroke='%2300F5D4' stroke-width='1.4' stroke-linejoin='round'/><path d='M6.6 12H9L10.4 8.7 13.4 15 14.8 12H17.2' stroke='%2300F5D4' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/><path d='M18.7 2.6 19.2 4.1 20.7 4.6 19.2 5.1 18.7 6.6 18.2 5.1 16.7 4.6 18.2 4.1Z' fill='%2300F5D4'/></svg>") center/contain no-repeat;}}
+[data-testid="stPopoverBody"]{{background:linear-gradient(158deg,#0e1a36,#0a1022 72%) !important;
+  border:1px solid rgba(0,245,212,.42) !important;border-radius:16px !important;
+  box-shadow:0 16px 54px rgba(0,0,0,.6),0 0 38px rgba(0,245,212,.2) !important;
+  max-width:560px !important;}}
+.mp-ai-head{{display:flex;align-items:center;gap:8px;font-size:11.5px;font-weight:800;letter-spacing:.16em;
+  text-transform:uppercase;color:#00F5D4;margin-bottom:10px;text-shadow:0 0 14px rgba(0,245,212,.5);}}
+.mp-ai-head::before{{content:"";width:17px;height:17px;flex:0 0 auto;
+  filter:drop-shadow(0 0 5px rgba(0,245,212,.8));
+  background:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none'><path d='M12 2.2 19.5 6.6V15.4L12 19.8 4.5 15.4V6.6Z' stroke='%2300F5D4' stroke-width='1.4' stroke-linejoin='round'/><path d='M6.6 12H9L10.4 8.7 13.4 15 14.8 12H17.2' stroke='%2300F5D4' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/><path d='M18.7 2.6 19.2 4.1 20.7 4.6 19.2 5.1 18.7 6.6 18.2 5.1 16.7 4.6 18.2 4.1Z' fill='%2300F5D4'/></svg>") center/contain no-repeat;}}
+.mp-ai-q{{font-size:13px;font-weight:700;color:#7ff0e4;margin-bottom:7px;}}
+.mp-ai-a{{font-size:14.5px;line-height:1.64;color:#EAF2FF;}}
+.mp-ai-a b{{color:#fff;font-weight:700;}}
+.mp-ai-a .imp{{display:block;margin-top:9px;padding-top:9px;border-top:1px solid rgba(0,245,212,.2);
+  color:#9fe9df;font-size:13.5px;}}
+.mp-ai-a .imp b{{color:#bafdf4;}}
 </style>
 """
 
@@ -161,6 +320,62 @@ def get_engine():
 @st.cache_data(ttl=600, show_spinner="Assembling decision intelligence…")
 def get_payload(alpha, freq, scenario):
     return assemble(scenario_name=scenario, freq=freq, alpha=alpha)
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def get_validation():
+    """Load out-of-sample verdicts. Degrades gracefully if the table isn't built yet."""
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT asset, factor, prod_significant, verdict, wf_r2, wf_hit, "
+                    "holdout_r2, sign_stable, n_wf FROM signal_validation")
+        cols = [c[0] for c in cur.description]
+        df = pd.DataFrame(cur.fetchall(), columns=cols)
+        cur.close()
+        conn.close()
+        for c in ("wf_r2", "wf_hit", "holdout_r2", "sign_stable"):
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
+VAL_STYLE = {
+    "validated": (GOOD, "✓ Validated OOS"),
+    "partial": (WARN, "~ Partial OOS"),
+    "in-sample only": (BAD, "✗ In-sample only"),
+    "insufficient data": (MUTED, "· Unproven"),
+}
+
+
+def _strip_suffix(a):
+    return a.replace("_ret", "").replace("_diff", "")
+
+
+def val_lookup(vdf):
+    """Map validation rows to {(sector_label, factor): verdict}, asset → sector via SECTOR_LABELS."""
+    out = {}
+    if vdf is None or vdf.empty:
+        return out
+    for r in vdf.itertuples():
+        sec = SECTOR_LABELS.get(r.asset) or SECTOR_LABELS.get(_strip_suffix(r.asset)) or _strip_suffix(r.asset)
+        out[(sec, r.factor)] = r.verdict
+    return out
+
+
+def verdict_for(s, vlook):
+    """Verdict for a sector's dominant driver (the factor carrying the call)."""
+    drv = s.get("drivers", [])
+    return vlook.get((s["sector"], drv[0]["factor"])) if drv else None
+
+
+def validation_chip(verdict):
+    if not verdict:
+        return ""
+    color, label = VAL_STYLE.get(verdict, (MUTED, verdict))
+    return (f'<span class="mp-vchip" style="color:{color};border-color:{_rgba(color,.45)};'
+            f'background:{_rgba(color,.12)};">{label}</span>')
 
 
 def regime_pills(ms):
@@ -206,24 +421,42 @@ def kpi_interp(c):
     return ""
 
 
-def sector_story(s):
+def _driver_sentence(s, d, ms):
+    """Driver-accurate fallback: describe the dominant factor's actual move and whether it
+    helps or pressures the sector — never an assumed mechanism."""
+    factor = d["factor"]
+    shock = (ms or {}).get(factor)
+    if shock is None:  # infer sign from contribution and beta if macro state not passed
+        shock = d.get("contribution_pct", 0.0) * d.get("beta", 0.0)
+    pos, neg = FACTOR_MOVE.get(factor, ("conditions improve", "conditions deteriorate"))
+    move = pos if (shock or 0) > 0 else neg
+    verb = "Screens positive" if d.get("contribution_pct", 0.0) >= 0 else "Comes under pressure"
+    return f"{verb} as {move}."
+
+
+def sector_story(s, ms=None):
     arch = SECTOR_ARCHETYPE.get(s["sector"], "Sector")
-    story = SECTOR_STORY.get(s["sector"], {}).get(s["direction"])
-    if not story:
-        fac = s["drivers"][0]["factor"] if s.get("drivers") else None
-        story = f"Responds to shifts in {DRIVER_PHRASE.get(fac, 'macro conditions')}."
-    return arch, story, CONF_LABEL.get(s["evidence"], "—")
+    conf = CONF_LABEL.get(s["evidence"], "—")
+    drv = s.get("drivers", [])
+    if not drv:
+        return arch, "No dominant macro driver this regime.", conf
+    d = drv[0]  # dominant contributor
+    story = SECTOR_STORY.get((s["sector"], d["factor"])) or _driver_sentence(s, d, ms)
+    if conf == "Low":
+        story += " A weak, marginal signal — low conviction."
+    return arch, story, conf
 
 
-def wl_card(s, good=True):
-    arch, story, conf = sector_story(s)
+def wl_card(s, good=True, ms=None, vchip=""):
+    arch, story, conf = sector_story(s, ms)
     dot = GOOD if good else BAD
     cc = CONF_COLOR.get(conf, MUTED)
     return (f'<div class="mp-wl"><div class="mp-wl-h">'
             f'<span class="mp-wl-name"><span class="dot" style="background:{dot};box-shadow:0 0 10px {dot};margin-right:10px;"></span>{s["sector"]}</span>'
             f'<span class="mp-badge" style="color:{cc};border-color:{_rgba(cc,.45)};background:{_rgba(cc,.12)};">{conf}</span></div>'
             f'<div class="mp-wl-arch">{arch}</div>'
-            f'<div class="mp-wl-story">{story}</div></div>')
+            f'<div class="mp-wl-story">{story}</div>'
+            f'{("<div style=\"margin-top:9px;\">" + vchip + "</div>") if vchip else ""}</div>')
 
 
 def _kpi_color(ind, chg):
@@ -257,7 +490,7 @@ def macro_kpi(c, outsized=False):
             f'<div class="val" style="color:{color};">{headline}{warn}</div>'
             f'<div class="kint" style="color:{color};">{interp}</div>'
             f'<div class="cap">{c["period_label"]} release</div>'
-            f'<div class="cap" style="color:#A9BCD0;font-size:11px;">{detail}</div></div>')
+            f'<div class="cap" style="color:#7d93ab;font-size:11px;">{detail}</div></div>')
 
 
 def _signal_counts(engine, alpha):
@@ -273,7 +506,7 @@ def _signal_counts(engine, alpha):
     return obs, nsig
 
 
-def signal_quality(payload, obs, nsig, fresh):
+def signal_quality(payload, obs, nsig, fresh, vdf=None):
     mc = payload.get("macro_cards", [])
     rel = (max(mc, key=lambda c: c.get("period", ""))["period_label"] if mc else None)
     items = [f"{rel} release incorporated" if rel else "Latest macro release incorporated"]
@@ -281,6 +514,12 @@ def signal_quality(payload, obs, nsig, fresh):
         items.append(f"{obs} daily observations analyzed")
     if nsig is not None:
         items.append(f"{nsig} statistically significant relationships detected")
+    if vdf is not None and not vdf.empty:
+        shipped = vdf[vdf["prod_significant"].astype(bool)]
+        if not shipped.empty:
+            nval = int((shipped["verdict"] == "validated").sum())
+            npart = int((shipped["verdict"] == "partial").sum())
+            items.append(f"{nval} of {len(shipped)} signals validated out-of-sample ({npart} partial)")
     items.append(f"Confidence: {(payload.get('confidence') or '—').capitalize()}")
     items.append(f"Data freshness: {'Current' if fresh else 'Unavailable'}")
     return items
@@ -384,7 +623,7 @@ def morning_brief(payload, ms, ups, downs, obs, nsig):
     if ups or downs:
         parts = []
         if ups:
-            a, _, c = sector_story(ups[0])
+            a, _, c = sector_story(ups[0], ms)
             parts.append(f"flags {ups[0]['sector']} as the highest-conviction beneficiary "
                          f"({a.lower()}, {c.lower()} confidence)")
         if downs:
@@ -449,12 +688,7 @@ def driver_decomp_fig(active):
         if any(abs(x) > 1e-9 for x in xs):
             fig.add_bar(name=FACTOR_LABEL.get(f, f), y=secs, x=xs, orientation="h", marker_color=FACTOR_COLOR.get(f))
     _fig_base(fig, len(secs)).update_layout(barmode="relative", xaxis_title="contribution to implied move (%)",
-                                            legend=dict(
-    orientation="h",
-    y=1.18,
-    x=0,
-    font=dict(size=11, color="#DCE7F3")
-))
+                                            legend=dict(orientation="h", y=1.18, x=0, font=dict(size=11, color="#DCE7F3")))
     return fig
 
 
@@ -486,10 +720,13 @@ ups = [s for s in payload.get("active_sectors", []) if s["direction"] == "up"]
 downs = [s for s in payload.get("active_sectors", []) if s["direction"] == "down"]
 conf = (payload.get("confidence") or "—").capitalize()
 obs, nsig = _signal_counts(engine, alpha)
+vdf = get_validation()
+vlook = val_lookup(vdf)
 
 # ---- market ribbon ----------------------------------------------------------
 ribbon = payload.get("market_ribbon", [])
 if ribbon:
+    ai_header('<span class="mp-sub" style="margin:0;">Daily market pulse</span>', "market_pulse")
     cells = ""
     for m in ribbon:
         pc = m.get("pct")
@@ -512,6 +749,8 @@ st.markdown(
     f'<div class="mp-meta"><span class="mp-chip">🕒 updated {asof}</span><br>{fresh_chip}<br>'
     f'<span class="mp-chip">confidence: {conf}</span></div></div>',
     unsafe_allow_html=True)
+ai_header('<span class="mp-sub" style="margin:0;">What does today\'s regime mean?</span>',
+          "regime", body=regime_explanation(ms), ratio=(0.7, 0.3))
 
 if not fresh:
     st.error("Macro state is empty for this connection — `analysis_daily` returned no rows, so every "
@@ -521,6 +760,7 @@ if not fresh:
 # ---- macro evidence (so-what KPIs) ------------------------------------------
 cards = {c["indicator"]: c for c in payload.get("macro_cards", [])}
 if cards:
+    ai_header('<span class="mp-sub" style="margin:0;">Macro indicators</span>', "kpi")
     cols = st.columns(3)
     for col, ind in zip(cols, ["CPI", "IIP", "Unemployment"]):
         if cards.get(ind):
@@ -538,8 +778,9 @@ for typ, txt in brief_lines:
         parts += f'<div class="lnw">👁 {txt}</div>'
     else:
         parts += f'<div class="conf">{txt}</div>'
-st.markdown(f'<div class="mp-brief mp-glass"><div class="ttl">Morning brief · daily note</div>{parts}</div>',
-            unsafe_allow_html=True)
+ai_header('<span class="mp-sub" style="margin:0;color:#00F5D4;">Morning brief · daily note</span>',
+          "morning_brief")
+st.markdown(f'<div class="mp-brief mp-glass">{parts}</div>', unsafe_allow_html=True)
 with st.expander("Sector pressure detail · visual"):
     figA = sector_pressure_fig(payload.get("active_sectors", []))
     if figA:
@@ -554,26 +795,28 @@ with st.expander("Sector pressure detail · visual"):
             st.markdown(t)
 
 # ---- signal quality (trust panel) -------------------------------------------
-sq = signal_quality(payload, obs, nsig, fresh)
-sq_html = '<div class="h">Signal quality</div>' + "".join(
-    f'<span class="it"><span class="ck">✓</span>{x}</span>' for x in sq)
+sq = signal_quality(payload, obs, nsig, fresh, vdf)
+ai_header('<span class="mp-sub" style="margin:0;">Signal quality</span>', "signal_quality")
+sq_html = "".join(f'<span class="it"><span class="ck">✓</span>{x}</span>' for x in sq)
 st.markdown(f'<div class="mp-sq mp-glass">{sq_html}</div>', unsafe_allow_html=True)
 
 # ---- winners & losers -------------------------------------------------------
 st.markdown('<div class="sec-h">Beneficiaries &nbsp;·&nbsp; Under pressure</div>', unsafe_allow_html=True)
 w, l = st.columns(2)
 with w:
-    st.markdown(f'<div style="color:{GOOD};font-weight:700;margin-bottom:10px;">🟢 Beneficiaries</div>', unsafe_allow_html=True)
+    ai_header(f'<span style="color:{GOOD};font-weight:700;">🟢 Beneficiaries</span>',
+              "beneficiaries", ratio=(0.55, 0.45))
     if ups:
         for s in ups:
-            st.markdown(wl_card(s, True), unsafe_allow_html=True)
+            st.markdown(wl_card(s, True, ms, validation_chip(verdict_for(s, vlook))), unsafe_allow_html=True)
     else:
         st.markdown('<div class="mp-wl mp-wl-story">No sector flagged as a clear beneficiary right now.</div>', unsafe_allow_html=True)
 with l:
-    st.markdown(f'<div style="color:{BAD};font-weight:700;margin-bottom:10px;">🔴 Under pressure</div>', unsafe_allow_html=True)
+    ai_header(f'<span style="color:{BAD};font-weight:700;">🔴 Under pressure</span>',
+              "under_pressure", ratio=(0.55, 0.45))
     if downs:
         for s in downs:
-            st.markdown(wl_card(s, False), unsafe_allow_html=True)
+            st.markdown(wl_card(s, False, ms, validation_chip(verdict_for(s, vlook))), unsafe_allow_html=True)
     else:
         st.markdown('<div class="mp-wl mp-wl-story">No sector flagged as clearly vulnerable right now.</div>', unsafe_allow_html=True)
     ne = payload.get("no_exposure_sectors", [])
@@ -586,7 +829,7 @@ with l:
                     f'current factors — neither tailwind nor headwind this cycle.</div></div>', unsafe_allow_html=True)
 
 # ---- scenario intelligence (compact, secondary) -----------------------------
-st.markdown('<div class="sec-h">Scenario intelligence</div>', unsafe_allow_html=True)
+ai_header('<span class="sec-h" style="margin:0;">Scenario intelligence</span>', "scenario")
 if "scenario" not in st.session_state:
     st.session_state.scenario = "Stagflation"
 scols = st.columns(4)
@@ -618,9 +861,9 @@ st.markdown(
     unsafe_allow_html=True)
 with st.expander("Advanced scenario tools · custom macro shock builder"):
     st.markdown(
-    "<span style='color:#B7C7D9;font-size:15px;'>Build a custom macro regime. Define inflation, industrial activity and labour-market assumptions to project likely sector beneficiaries and vulnerabilities.</span>",
-    unsafe_allow_html=True
-)
+        "<span style='color:#B7C7D9;font-size:15px;'>Build a custom macro regime. Define inflation, "
+        "industrial activity and labour-market assumptions to project likely sector beneficiaries "
+        "and vulnerabilities.</span>", unsafe_allow_html=True)
     cpi_opts = {"holds steady": 0.0, "rises 0.5%": 0.005, "rises 1%": 0.01, "rises 2%": 0.02,
                 "falls 0.5%": -0.005, "falls 1%": -0.01}
     iip_opts = {"holds steady": 0.0, "rises 3%": 0.03, "rises 6%": 0.06,
@@ -643,11 +886,9 @@ with st.expander("Advanced scenario tools · custom macro shock builder"):
                 unsafe_allow_html=True)
     if not cu:
         st.markdown(
-    "<div style='color:#B7C7D9;font-size:14px;'>"
-    "Select one or more macro changes to estimate sector impacts."
-    "</div>",
-    unsafe_allow_html=True
-)
+            "<div style='color:#B7C7D9;font-size:14px;'>"
+            "Select one or more macro changes to estimate sector impacts.</div>",
+            unsafe_allow_html=True)
     else:
         cr = sim.simulate(cu, freq="daily", alpha=alpha, significant_only=sig_only)
         if cr.empty:
@@ -666,7 +907,7 @@ with st.expander("Advanced scenario tools · custom macro shock builder"):
                         unsafe_allow_html=True)
 
 # ---- business interpretation ------------------------------------------------
-st.markdown('<div class="sec-h">Business interpretation</div>', unsafe_allow_html=True)
+ai_header('<span class="sec-h" style="margin:0;">Business interpretation</span>', "business_interpretation")
 bullets = "".join(f'<li style="margin-bottom:9px;">{x}</li>' for x in business_insight(ups, downs, ms))
 st.markdown(f'<div class="mp-glass" style="padding:20px 26px;">'
             f'<ul style="font-size:15.5px;line-height:1.55;color:#dce7f3;margin:0;padding-left:20px;">{bullets}</ul></div>',
@@ -679,13 +920,12 @@ if figB:
     st.plotly_chart(figB, use_container_width=True, config={"displayModeBar": False})
 
 # ---- methodology & validation (background) ----------------------------------
-with st.expander("Methodology & validation"):
+ai_header('<span class="sec-h" style="margin:0;">Methodology &amp; validation</span>', "methodology")
+with st.expander("Open the audit layer"):
     st.markdown(
-    "<div style='color:#B7C7D9;font-size:14px;'>"
-    "Audit layer — regression betas, significance, R², correlations. For validation only."
-    "</div>",
-    unsafe_allow_html=True
-)
+        "<div style='color:#B7C7D9;font-size:14px;'>"
+        "Audit layer — regression betas, significance, R², correlations. For validation only.</div>",
+        unsafe_allow_html=True)
     sct = st.selectbox("Sector → factor sensitivities", list(SECTOR_LABELS.values()), key="rs_sector")
     st.dataframe(engine.sector_view(INV_LABELS[sct], freq=freq), hide_index=True, use_container_width=True)
     fac = st.selectbox("Factor → all sectors", FACTORS, key="rs_factor")
@@ -697,19 +937,28 @@ with st.expander("Methodology & validation"):
     sig = payload.get("significant_sensitivities", [])
     if sig:
         st.markdown(
-    "<span style='color:#DCE7F3;font-size:20px;font-weight:600;'>"
-    "Significant sensitivities"
-    "</span>",
-    unsafe_allow_html=True
-)
+            "<span style='color:#DCE7F3;font-size:20px;font-weight:600;'>"
+            "Significant sensitivities</span>", unsafe_allow_html=True)
         st.dataframe(pd.DataFrame(sig), hide_index=True, use_container_width=True)
     cm = engine.correlation_matrix(freq=freq)
     if not cm.empty:
         cm = cm[cm.index.isin(SECTOR_LABELS)].rename(index=SECTOR_LABELS)
         st.markdown(
-    "<span style='color:#DCE7F3;font-size:20px;font-weight:600;'>"
-    "Correlation matrix (sectors)"
-    "</span>",
-    unsafe_allow_html=True
-)
+            "<span style='color:#DCE7F3;font-size:20px;font-weight:600;'>"
+            "Correlation matrix (sectors)</span>", unsafe_allow_html=True)
         st.dataframe(cm, use_container_width=True)
+    if not vdf.empty:
+        st.markdown(
+            "<span style='color:#DCE7F3;font-size:20px;font-weight:600;'>"
+            "Out-of-sample validation (monthly, point-in-time)</span>", unsafe_allow_html=True)
+        st.markdown(
+            "<div style='color:#B7C7D9;font-size:13px;margin-bottom:6px;'>Walk-forward verdict per signal. "
+            "<b>wf_r2</b> &gt; 0 beats a naive mean; <b>wf_hit</b> is directional accuracy. "
+            "n ≈ 13 months — an early robustness read, not proof.</div>", unsafe_allow_html=True)
+        vshow = vdf.copy()
+        vshow["sector"] = vshow["asset"].map(lambda a: SECTOR_LABELS.get(a)
+                                             or SECTOR_LABELS.get(_strip_suffix(a)) or _strip_suffix(a))
+        vshow = vshow.sort_values(["prod_significant", "verdict"], ascending=[False, True])
+        st.dataframe(vshow[["sector", "factor", "prod_significant", "verdict",
+                            "wf_r2", "wf_hit", "holdout_r2", "sign_stable", "n_wf"]],
+                     hide_index=True, use_container_width=True)
