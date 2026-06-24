@@ -29,14 +29,14 @@
 
 ---
 
-## ⚡ Why this project is different (30-second version)
+##  Why this project is different (30-second version)
 
 Most analytics portfolios stop at "I built a dashboard." MacroPulse goes three steps further:
 
-- **🎯 It validates itself.** Every sector signal is tested **out-of-sample** with point-in-time, walk-forward validation — so the dashboard can tell you which calls to *trust* and which to *caveat*, backed by evidence rather than intuition. (Of 11 production signals: **3 validated, 8 partial, 0 that failed outright.**)
-- **🧠 It explains itself.** An in-product **AI copilot** translates every concept — *contractionary regime, consumer-defensive, stagflation* — into plain English plus its business implication, so a recruiter, manager, or curious student understands the platform without an economics degree.
-- **🏗️ It runs itself.** A cloud-native, CI-driven pipeline ingests live data daily and monthly, engineers **lookahead-audited** features, and refreshes the whole stack automatically.
-- **🧭 It's framed for decisions, not just data.** Built from an economics-first perspective: the question is always "what does this *mean* for a business," not "here is a regression."
+- ** It validates itself.** Every sector signal is tested **out-of-sample** with point-in-time, walk-forward validation — so the dashboard can tell you which calls to *trust* and which to *caveat*, backed by evidence rather than intuition. (Of 11 production signals: **3 validated, 8 partial, 0 that failed outright.**)
+- ** It explains itself.** An in-product **AI copilot** translates every concept — *contractionary regime, consumer-defensive, stagflation* — into plain English plus its business implication, so a recruiter, manager, or curious student understands the platform without an economics degree.
+- ** It runs itself.** A cloud-native, CI-driven pipeline ingests live data daily and monthly, engineers **lookahead-audited** features, and refreshes the whole stack automatically.
+- ** It's framed for decisions, not just data.** Built from an economics-first perspective: the question is always "what does this *mean* for a business," not "here is a regression."
 
 ---
 
@@ -52,7 +52,7 @@ MacroPulse closes that gap. It continuously answers three questions a decision-m
 
 ---
 
-## 🧩 What it does
+##  What it does
 
 | Capability | What it delivers |
 |---|---|
@@ -72,39 +72,39 @@ A layered pipeline: raw sources → cloud database → point-in-time features �
 
 ```mermaid
 flowchart TD
-    subgraph SRC["📡 Live sources"]
+    subgraph SRC["Live sources"]
         A1["Daily market & macro<br/>(rupee, Nifty 50, Bank Nifty, Brent,<br/>gold, India VIX, US Dollar Index, US 10Y)"]
         A2["Monthly official releases<br/>(CPI, IIP, Unemployment / PLFS, RBI repo rate)"]
         A3["7 NSE sector indices<br/>(IT, Pharma, Auto, FMCG, Realty, Metal, Energy)"]
     end
 
-    subgraph ING["⚙️ Ingestion (Python ETL)"]
+    subgraph ING["Ingestion (Python ETL)"]
         B1["fetch_daily.py / backfill_daily.py"]
         B2["fetch_monthly.py<br/>(auto-discovers MoSPI API params)"]
     end
 
-    DB[("🗄️ TiDB Cloud<br/>daily_indicators · monthly_indicators")]
+    DB[("TiDB Cloud<br/>daily_indicators · monthly_indicators")]
 
-    subgraph FEAT["🔧 Feature & analysis layer"]
+    subgraph FEAT["Feature & analysis layer"]
         C1["build_features.py<br/>point-in-time merge_asof on release_date"]
         C2["transforms.py + build_analysis.py<br/>stationary returns / diffs / changes"]
     end
 
-    subgraph MODEL["📐 Sensitivity engine"]
+    subgraph MODEL["Sensitivity engine"]
         D1["sensitivity_matrix.py<br/>univariate OLS macro→sector betas<br/>HAC (Newey-West) errors"]
         D2["sensitivity_engine.py<br/>query / projection API"]
     end
 
-    subgraph SERVE["🧠 Serving layer"]
+    subgraph SERVE["Serving layer"]
         E1["impact_panel.py<br/>who benefits / who's exposed"]
         E2["whatif_simulator.py<br/>scenario shocks → sector response"]
         E3["ai_briefing.py<br/>plain-language analyst note"]
         E4["validate_signals.py<br/>out-of-sample walk-forward validation"]
     end
 
-    UI["🖥️ streamlit_app.py<br/>decision-intelligence command center<br/>+ AI copilot explanation layer"]
+    UI[" streamlit_app.py<br/>decision-intelligence command center<br/>+ AI copilot explanation layer"]
 
-    CI["🔄 GitHub Actions<br/>daily.yml · monthly.yml"]
+    CI[" GitHub Actions<br/>daily.yml · monthly.yml"]
 
     A1 & A3 --> B1
     A2 --> B2
@@ -117,7 +117,7 @@ flowchart TD
 
 ---
 
-## 🔬 Methodology & validation — the part that matters
+##  Methodology & validation — the part that matters
 
 The analytical core is a **sector-sensitivity matrix**: for each NSE sector and each macro factor, a univariate regression of the sector's stationary return on the factor's change, `rᵢ = a + b·mⱼ`. Three deliberate choices make it defensible:
 
@@ -135,9 +135,9 @@ In-sample significance is not enough — a relationship can fit the data it was 
 
 | Signal | Verdict | Out-of-sample read |
 |---|---|---|
-| **Nifty 50 × Industrial production** | ✅ Validated | OOS R² **+0.107**, directional hit-rate **85.7%** |
-| **FMCG × Industrial production** | ✅ Validated | The strongest dashboard-supported signal — corroborates the headline "defensive" call |
-| **IT × Industrial production** | ⚠️ Direction only | Stable *sign* and direction, but holdout R² **−24.4** → trust the direction, **not** the magnitude |
+| **Nifty 50 × Industrial production** |  Validated | OOS R² **+0.107**, directional hit-rate **85.7%** |
+| **FMCG × Industrial production** |  Validated | The strongest dashboard-supported signal — corroborates the headline "defensive" call |
+| **IT × Industrial production** |  Direction only | Stable *sign* and direction, but holdout R² **−24.4** → trust the direction, **not** the magnitude |
 
 > **Honest limitation, stated up front:** with ≈13 months of macro history this is an **early robustness read, not proof** — and "0 signals failed outright" is partly a small-sample effect. The defensible claim is *"no shipped signal failed, and the most-relied-on signal validated,"* not *"everything is proven."* The framework is built to sharpen automatically as history accrues. Surfacing that caveat **in the product itself** is the point.
 
@@ -207,7 +207,7 @@ It is the centrepiece of a portfolio aimed at **data analyst / business analyst 
 
 ---
 
-## 🧭 Roadmap
+##  Roadmap
 
 - [x] Out-of-sample signal validation & in-product trust layer
 - [x] AI copilot explanation layer
